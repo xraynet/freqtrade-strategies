@@ -1,15 +1,12 @@
 """
-TrendRider Public v2.11.0 — Strat Ninja Edition
+TrendRider Strategy
 
-Philosophy: Ride established trends with WIDE stoploss.
-Key insight: crypto swings 2-4% per hour. Stoploss must be >= 5-6%.
+Ride established trends with ATR-aware stoploss.
+Key insight: crypto swings 2-4% per hour, stoploss must accommodate this volatility.
 
-Public version:
-- No external API calls (FNG, Bybit funding/OI)
-- No SQLite price alerts
-- No Cornix formatting
 - Leverage 1x (spot-safe)
-- All TA-Lib indicators and confidence scoring preserved
+- TA-Lib indicators with confidence scoring
+- Multiple entry signals: pullback, EMA bounce, RSI bounce, crossover, BB bounce, MACD reversal
 """
 
 import talib.abstract as ta
@@ -33,11 +30,11 @@ class TrendRiderStrategy(IStrategy):
         "764": 0,       # breakeven after ~12.7h
     }
 
-    # --- Stoploss: WIDE for crypto volatility ---
+    # --- Stoploss ---
     stoploss = -0.06           # 6% default (ATR-based custom stoploss overrides)
     use_custom_stoploss = False
 
-    # --- Trailing Stop: WIDE ---
+    # --- Trailing Stop ---
     trailing_stop = True
     trailing_stop_positive = 0.03        # 3% trail
     trailing_stop_positive_offset = 0.05 # Activate after +5%
@@ -619,127 +616,19 @@ class TrendRiderStrategy(IStrategy):
     def confirm_trade_entry(self, pair: str, order_type: str, amount: float, rate: float,
                            time_in_force: str, current_time: datetime, entry_tag: str | None,
                            side: str, **kwargs) -> bool:
-        # Calculate levels (LONG only, can_short = False)
-        sl_price = rate * (1 + self.stoploss)
-        tp2_price = rate * 1.05   # +5%
-
-        leverage = self.leverage_value
-        side_str = "LONG"
-
-        # Risk/reward ratio
-        risk = abs(rate - sl_price)
-        reward = abs(tp2_price - rate)
-        rr_ratio = reward / risk if risk > 0 else 0
-
-        # Entry reason mapping
-        reasons = {
-            "trend_pullback": "Pullback to EMA in uptrend, bounce with volume confirmation",
-            "ema50_bounce": "Deep pullback to EMA50, bounce with rising MACD",
-            "rsi_bounce": "RSI oversold, bounce from lower Bollinger in bull market",
-            "ema_crossover": "EMA9 crossed above EMA16, golden cross with trend confirmation",
-            "bb_bounce": "Price bounced from lower Bollinger Band with oversold RSI",
-            "macd_reversal": "MACD histogram turned positive, momentum shift above EMA50",
-        }
-        reason = reasons.get(entry_tag, entry_tag or "Signal")
-
-        # Get current indicators for context
+        # Get current indicators for confidence filter
         dataframe, _ = self.dp.get_analyzed_dataframe(pair, self.timeframe)
         if len(dataframe) > 0:
             last = dataframe.iloc[-1]
-            rsi_key = f"rsi_{self.rsi_period.value}"
-            rsi_val = last.get(rsi_key, 0)
-            adx_val = last.get("adx", 0)
-            vol_ratio = last.get("volume_ratio", 0)
-            macd_hist = last.get("macdhist", 0)
         else:
-            rsi_val = adx_val = vol_ratio = macd_hist = 0
             last = {}
 
-        # Confidence & market context
-        conf_level, conf_bar, conf_details, conf_numeric = self._calc_confidence(last)
-        market_ctx = self._market_context(last)
+        # Confidence & regime filter — reject weak signals
+        _, _, _, conf_numeric = self._calc_confidence(last)
         regime = self._get_market_regime(last)
-
-        # --- REJECT WEAK SIGNALS ---
         min_conf = 6 if "Bear" in regime else 5
         if conf_numeric < min_conf:
             logger.info(f"Rejecting signal for {pair}: confidence {conf_numeric}/10 < {min_conf} (regime: {regime})")
             return False
 
-        # --- Main Telegram Signal ---
-        msg = (
-            f"*TRENDRIDER SIGNAL*\n"
-            f"{'='*28}\n"
-            f"*{pair}* | *{side_str}* | {leverage}x\n"
-            f"{'='*28}\n\n"
-            f"*Entry:* `{rate:.2f}` USDT\n"
-            f"*Stop Loss:* `{sl_price:.2f}` ({self.stoploss*100:+.1f}%)\n"
-            f"  R:R = 1:{rr_ratio:.1f}\n\n"
-            f"*Confidence:* {conf_level}\n"
-            f"  [{conf_bar}]\n"
-            f"  {', '.join(conf_details)}\n\n"
-            f"*Regime:* {regime}\n"
-            f"*Indicators:*\n"
-            f"  RSI: {rsi_val:.1f} | ADX: {adx_val:.1f}\n"
-            f"  Volume: {vol_ratio:.2f}x | MACD: {'+'  if macd_hist > 0 else '-'}\n\n"
-            f"*Market:* {market_ctx}\n\n"
-            f"*Why:* {reason}\n"
-            f"{'='*28}\n"
-            f"_TrendRider AI_"
-        )
-        self.dp.send_msg(msg, always_send=True)
-
-        return True
-
-    def confirm_trade_exit(self, pair: str, trade, order_type: str, amount: float,
-                          rate: float, time_in_force: str, exit_reason: str,
-                          current_time: datetime, **kwargs) -> bool:
-        # Calculate results (LONG only)
-        profit_pct = ((rate - trade.open_rate) / trade.open_rate) * 100 * trade.leverage
-        duration_hours = (current_time - trade.open_date_utc).total_seconds() / 3600
-
-        # Exit reason mapping
-        exit_reasons = {
-            "roi": "ROI target reached",
-            "stop_loss": "Stop Loss hit",
-            "trailing_stop_loss": "Trailing Stop",
-            "exit_signal": "Exit signal",
-            "rsi_overbought": "RSI overbought (>81)",
-            "ema_bearish_cross": "EMA bearish crossover",
-            "trend_broken": "Trend broken (below EMA200)",
-            "force_exit": "Force exit",
-            "time_exit_24h": "Time exit (24h, low profit)",
-        }
-        reason_text = exit_reasons.get(exit_reason, exit_reason)
-
-        # Result line
-        if profit_pct > 0:
-            result_line = f"+{profit_pct:.2f}%"
-        else:
-            result_line = f"{profit_pct:.2f}%"
-
-        # Duration formatting
-        if duration_hours < 1:
-            dur_str = f"{int(duration_hours * 60)}m"
-        elif duration_hours < 24:
-            dur_str = f"{duration_hours:.1f}h"
-        else:
-            dur_str = f"{duration_hours/24:.1f}d"
-
-        msg = (
-            f"*TRADE CLOSED* {'WIN' if profit_pct > 0 else 'LOSS'}\n"
-            f"{'='*25}\n"
-            f"*{pair}* | LONG | {trade.leverage}x\n"
-            f"{'='*25}\n\n"
-            f"*Entry:* `{trade.open_rate:.2f}`\n"
-            f"*Exit:* `{rate:.2f}`\n"
-            f"*Result:* *{result_line}*\n"
-            f"*Duration:* {dur_str}\n"
-            f"*Reason:* {reason_text}\n"
-            f"*Max price:* `{trade.max_rate:.2f}`\n"
-            f"{'='*25}\n"
-            f"_TrendRider AI_"
-        )
-
-        self.dp.send_msg(msg, always_send=True)
         return True
