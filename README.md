@@ -42,7 +42,6 @@ Value below are result from backtesting from 2018-01-10 to 2018-01-30 and
 | [Strategy 003](https://github.com/freqtrade/freqtrade-strategies/blob/main/user_data/strategies/Strategy003.py) | 14 | 1.47 | 0.00081740 |  227.5 | 2018-01-10 to 2018-01-30 | 
 | [Strategy 004](https://github.com/freqtrade/freqtrade-strategies/blob/main/user_data/strategies/Strategy004.py) | 37 | 0.69 | 0.00102128 |  367.3 | 2018-01-10 to 2018-01-30 | 
 | [Strategy 005](https://github.com/freqtrade/freqtrade-strategies/blob/main/user_data/strategies/Strategy005.py) | 180 | 1.16 | 0.00827589 |  156.2 | 2018-01-10 to 2018-01-30 |
-| [TrendRiderStrategy](https://github.com/freqtrade/freqtrade-strategies/blob/main/user_data/strategies/TrendRiderStrategy.py) | 94 | 0.26 | +3.04% | 11h 48m | 2026-03-15 to 2026-04-14 (Bybit 1h, 15 USDT perps) |
 
 Strategies from this repo are free to use. Feel free to update them to your likings.
 Most of them  were designed from Hyperopt calculations.
